@@ -1,0 +1,6 @@
+{
+  "name": "Latent Space Explorer",
+  "description": "An interactive 3D visualization simulator of mixed tabular data across different machine learning latent spaces.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
