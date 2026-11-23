@@ -1,20 +1,23 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { LatentPoint, ColorDimension, ModelType } from '../types';
-import { SECTOR_COLORS, REGION_COLORS } from '../constants';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { LatentPoint, ModelType } from '../types';
 import { Download, Loader2, RefreshCw, Palette } from 'lucide-react';
 
 interface LatentPlotProps {
   data: LatentPoint[];
   modelType: ModelType;
-  colorDimension: ColorDimension;
-  onColorDimensionChange: (dim: ColorDimension) => void;
+  colorDimension: string;
+  onColorDimensionChange: (dim: string) => void;
+  availableDimensions: string[];
 }
+
+const PALETTE = ['#58a6ff', '#3fb950', '#d29922', '#a371f7', '#f778ba', '#38bdf8', '#f59e0b', '#ec4899'];
 
 export const LatentPlot: React.FC<LatentPlotProps> = ({
   data,
   modelType,
   colorDimension,
   onColorDimensionChange,
+  availableDimensions,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [plotlyStatus, setPlotlyStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -39,27 +42,47 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
     checkPlotly();
   }, []);
 
+  // Determine if chosen color dimension is numeric or categorical
+  const isContinuous = useMemo(() => {
+    if (!data.length || !colorDimension) return false;
+    let numericCount = 0;
+    for (let i = 0; i < Math.min(data.length, 50); i++) {
+      if (typeof data[i][colorDimension] === 'number') numericCount++;
+    }
+    return numericCount / Math.min(data.length, 50) > 0.8;
+  }, [data, colorDimension]);
+
+  // Unique categories for discrete colors
+  const categoryMap = useMemo(() => {
+    if (isContinuous || !data.length || !colorDimension) return {};
+    const map: Record<string, string> = {};
+    let palIdx = 0;
+    data.forEach((d) => {
+      const val = String(d[colorDimension] || 'Unknown');
+      if (!map[val]) {
+        map[val] = PALETTE[palIdx % PALETTE.length];
+        palIdx++;
+      }
+    });
+    return map;
+  }, [data, colorDimension, isContinuous]);
+
   // Compute marker colors based on chosen dimension
   const getMarkerColors = useCallback(() => {
-    if (colorDimension === 'job_sector') {
-      return data.map((d) => SECTOR_COLORS[d.job_sector]);
+    if (isContinuous) {
+      return data.map((d) => Number(d[colorDimension]) || 0);
     }
-    if (colorDimension === 'region') {
-      return data.map((d) => REGION_COLORS[d.region]);
-    }
-    if (colorDimension === 'income') {
-      return data.map((d) => d.income);
-    }
-    // Age
-    return data.map((d) => d.age);
-  }, [data, colorDimension]);
+    return data.map((d) => {
+      const val = String(d[colorDimension] || 'Unknown');
+      return categoryMap[val] || '#58a6ff';
+    });
+  }, [data, colorDimension, isContinuous, categoryMap]);
 
   // Render or update plot
   useEffect(() => {
-    if (plotlyStatus !== 'ready' || !containerRef.current || !window.Plotly) return;
+    if (plotlyStatus !== 'ready' || !containerRef.current || !window.Plotly || !data.length) return;
 
     const colors = getMarkerColors();
-    const isContinuous = colorDimension === 'income' || colorDimension === 'age';
 
     const trace = {
       x: data.map((d) => d.x),
@@ -68,12 +91,12 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
       mode: 'markers',
       type: 'scatter3d',
       marker: {
-        size: data.map((d) => 5 + ((d.income - 38000) / 125000) * 10),
+        size: 7,
         color: colors,
         colorscale: isContinuous ? 'Viridis' : undefined,
         colorbar: isContinuous
           ? {
-              title: { text: colorDimension === 'income' ? 'Income ($)' : 'Age (yrs)', font: { color: '#8b949e', size: 10 } },
+              title: { text: colorDimension.replace(/_/g, ' '), font: { color: '#8b949e', size: 10 } },
               tickfont: { color: '#8b949e', size: 9 },
               len: 0.6,
               thickness: 12,
@@ -83,15 +106,16 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
         opacity: 0.85,
         line: { width: 0.6, color: '#ffffff' },
       },
-      text: data.map(
-        (d) =>
-          `<b>Record #${d.id}</b><br>` +
-          `• Latent Coordinates: (${d.x}, ${d.y}, ${d.z})<br>` +
-          `• Sector: ${d.job_sector}<br>` +
-          `• Region: ${d.region}<br>` +
-          `• Age: ${d.age} yrs<br>` +
-          `• Income: $${d.income.toLocaleString()}`
-      ),
+      text: data.map((d) => {
+        let hover = `<b>Record #${d.id}</b><br>• Latent: (${d.x}, ${d.y}, ${d.z})<br>`;
+        const displayKeys = Object.keys(d)
+          .filter((k) => k !== 'x' && k !== 'y' && k !== 'z' && k !== 'id')
+          .slice(0, 5);
+        displayKeys.forEach((k) => {
+          hover += `• ${k.replace(/_/g, ' ')}: ${d[k]}<br>`;
+        });
+        return hover;
+      }),
       hoverinfo: 'text',
     };
 
@@ -155,7 +179,7 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [data, modelType, colorDimension, plotlyStatus, getMarkerColors]);
+  }, [data, modelType, colorDimension, plotlyStatus, getMarkerColors, isContinuous]);
 
   const handleExport = async () => {
     if (!containerRef.current || !window.Plotly?.downloadImage) return;
@@ -181,14 +205,15 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
           <span className="text-[11px] font-medium text-[#8b949e] uppercase tracking-wider hidden sm:inline">Color By:</span>
           <select
             value={colorDimension}
-            onChange={(e) => onColorDimensionChange(e.target.value as ColorDimension)}
+            onChange={(e) => onColorDimensionChange(e.target.value)}
             aria-label="Color dimension selector"
-            className="bg-[#0c0d0e] border border-[#30363d] text-[12px] text-[#e6edf3] rounded px-2 py-0.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#2f81f7]"
+            className="bg-[#0c0d0e] border border-[#30363d] text-[12px] text-[#e6edf3] rounded px-2 py-0.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#2f81f7] capitalize"
           >
-            <option value="job_sector">Sector (Categorical)</option>
-            <option value="region">Region (Categorical)</option>
-            <option value="income">Income (Continuous)</option>
-            <option value="age">Age (Continuous)</option>
+            {availableDimensions.map((dim) => (
+              <option key={dim} value={dim}>
+                {dim.replace(/_/g, ' ')}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -227,7 +252,7 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
           <div className="max-w-md bg-[#161b22] border border-[#f85149]/40 p-6 rounded-[8px]">
             <h3 className="text-[16px] font-semibold text-[#f85149] mb-2">Graphics Engine Unavailable</h3>
             <p className="text-[13px] text-[#8b949e] mb-4">
-              Failed to load the 3D rendering library. Check your network connection or ad-blocker settings.
+              Failed to load the 3D rendering library. Check your network connection.
             </p>
             <button
               type="button"
@@ -241,40 +266,24 @@ export const LatentPlot: React.FC<LatentPlotProps> = ({
       )}
 
       {/* Floating Legend */}
-      <div className="absolute bottom-4 right-4 bg-[#161b22]/90 border border-[#30363d] p-3 rounded-[8px] text-[11px] backdrop-blur-md pointer-events-auto max-w-[200px] shadow-lg">
+      <div className="absolute bottom-4 right-4 bg-[#161b22]/90 border border-[#30363d] p-3 rounded-[8px] text-[11px] backdrop-blur-md pointer-events-auto max-w-[200px] shadow-lg max-h-[160px] overflow-y-auto custom-scrollbar">
         <div className="font-semibold text-[#e6edf3] mb-1.5 uppercase tracking-wide text-[#8b949e] text-[10px]">
-          Legend ({colorDimension.replace('_', ' ')})
+          Legend ({colorDimension.replace(/_/g, ' ')})
         </div>
 
-        {colorDimension === 'job_sector' &&
-          Object.entries(SECTOR_COLORS).map(([sector, color]) => (
-            <div key={sector} className="flex items-center gap-2 py-0.5">
+        {!isContinuous &&
+          Object.entries(categoryMap).map(([cat, color]) => (
+            <div key={cat} className="flex items-center gap-2 py-0.5">
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <span className="text-[#c9d1d9]">{sector} Sector</span>
+              <span className="text-[#c9d1d9] truncate">{cat}</span>
             </div>
           ))}
 
-        {colorDimension === 'region' &&
-          Object.entries(REGION_COLORS).map(([region, color]) => (
-            <div key={region} className="flex items-center gap-2 py-0.5">
-              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <span className="text-[#c9d1d9]">{region}</span>
-            </div>
-          ))}
-
-        {(colorDimension === 'income' || colorDimension === 'age') && (
-          <div className="text-[#8b949e] py-0.5">
-            Viridis colormap: lower values in dark violet/blue, higher values in yellow.
+        {isContinuous && (
+          <div className="text-[#8b949e] py-0.5 leading-snug">
+            Continuous colormap (Viridis): purple/blue represents lower values, green/yellow represents higher values.
           </div>
         )}
-
-        <div className="mt-2 pt-2 border-t border-[#30363d] text-[#8b949e] flex items-center gap-2">
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#8b949e]" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[#8b949e]" />
-          </div>
-          <span>Marker size = Income</span>
-        </div>
       </div>
     </div>
   );

@@ -7,12 +7,15 @@ export interface DataRow {
   income: number;
   job_sector: JobSector;
   region: Region;
+  [key: string]: string | number;
 }
 
-export interface LatentPoint extends DataRow {
+export interface LatentPoint {
+  id: number;
   x: number;
   y: number;
   z: number;
+  [key: string]: string | number;
 }
 
 export type ModelType = 'VAE' | 'Standard Autoencoder' | 'PCA' | 'UMAP/t-SNE';
@@ -24,4 +27,4 @@ export interface ModelIntuition {
   keyStrengths: string;
 }
 
-export type ColorDimension = 'job_sector' | 'region' | 'income' | 'age';
+export type ColorDimension = string;
